@@ -53,10 +53,32 @@ BDTLearner::~BDTLearner ()
 }
 
 //TODO: Class Booster needs to be implemented...
-void Booster::setFF(double inputF){
-  firstF = inputF;
+Booster::Booster(bool init_bool, double nsig=0, double nbg=0){
+  init_bool ? InitFX(nsig,nbg) : InitFX(-9999,-9999,false); 
 }
 
+Booster::~Booster ()
+
+{
+}
+
+void Booster::InitFX(double n_sig,double n_bg, bool useInit){
+    if(useInit){
+      if(n_sig>n_bg){
+         f_mmone = 1;
+      }
+      else if(n_bg>n_sig){
+        f_mmone = -1;
+      }
+      else{
+        f_mmone = 0;
+      }
+    }
+    else{
+      f_mmone=-1;
+    }
+}
+    
 //TODO: Add GetQuantile to Booster class
 double GetQuantile(vecpdd rw_vpair, double quant_val, bool weighted=false, double weightSum = 0){
 //Hold sum of all weights, current sum of weights, and final output quantile
@@ -84,34 +106,6 @@ double GetQuantile(vecpdd rw_vpair, double quant_val, bool weighted=false, doubl
   }
 //Return quantile
   return res_quant;
-/*    double node_quant = 0;
-    int quant_ind = quant_val*(sig_size+bg_size);
-//Get node residual at quantile
-    if(sig_res>bg_res){
-      if(bg_size>quant_ind){
-        node_quant = bg_res; 
-      }
-      else if(bg_size<quant_ind){
-        node_quant = sig_res;
-      }
-      else{
-        node_quant = (sig_res + bg_res)/2;
-      }
-    } 
-    else{
-      if(sig_size>quant_ind){
-        node_quant = sig_res;
-      }
-      else if(sig_size<quant_ind){
-        node_quant = bg_res;
-      }
-      else{
-        node_quant = (sig_res + bg_res)/2;
-      }
-    }
-
-  return node_quant;
- */      
 }
 
 
@@ -204,6 +198,8 @@ BDTLearner::set_defaults ()
 {
     m_dtlearner = boost::make_shared<DTLearner> (
         m_feature_names, m_sig_weight_name, m_bg_weight_name);
+   // m_dtlearner = boost::make_shared<RegLearner> (
+    //    m_feature_names, m_sig_weight_name, m_bg_weight_name);
 
     m_beta = 1;
     m_frac_random_events = 1.;
@@ -258,16 +254,17 @@ BDTLearner::train_given_everything (
     double quant_val = 0.7;
     std::map<const DTNode*,double> f_x;
 
-    if(n_sig>n_bg){
-      f_mmone = 1;
-    }
-    else if(n_bg>n_sig){
-      f_mmone = -1;
-    }
-    else{
-      f_mmone = 0;
-    }
-
+//    if(n_sig>n_bg){
+//      f_mmone = 1;
+//    }
+//    else if(n_bg>n_sig){
+//      f_mmone = -1;
+//    }
+//    else{
+//      f_mmone = 0;
+//    }
+    Booster gradBoost(true,n_sig,n_bg);
+    //gradBoost.InitFX(n_sig,n_bg);
 //Iterate over requested number of trees
     for (int m = 0; m < m_num_trees; ++m) {
         const int n_sig_used = static_cast<int>((m_frac_random_events * n_sig));
@@ -334,8 +331,8 @@ BDTLearner::train_given_everything (
           const DTNode* pLeaf = &eLeaf;
           double leaf_res = 1;
           double f_xi;
-          f_x.find(pLeaf)!=f_x.end() ? f_xi = f_x[pLeaf] : f_xi = f_mmone;
-          std::cout<<"First f_x: "<<f_xi<<" "<<f_mmone<<" "<<pLeaf<<std::endl;
+          f_x.find(pLeaf)!=f_x.end() ? f_xi = f_x[pLeaf] : f_xi = gradBoost.f_mmone;
+          std::cout<<"First f_x: "<<f_xi<<" "<<gradBoost.f_mmone<<" "<<pLeaf<<std::endl;
           resPairs.push_back(make_pair(leaf_res-f_xi,*my_w)); 
         }
         for(my_ev = bg_events->begin(),
@@ -345,8 +342,8 @@ BDTLearner::train_given_everything (
           const DTNode* pLeaf = &eLeaf;
           double leaf_res = -1;
           double f_xi;
-          f_x.find(pLeaf)!=f_x.end() ? f_xi = f_x[pLeaf] : f_xi = f_mmone;
-          std::cout<<"First f_x: "<<f_xi<<" "<<f_mmone<<" "<<pLeaf<<std::endl;
+          f_x.find(pLeaf)!=f_x.end() ? f_xi = f_x[pLeaf] : f_xi = gradBoost.f_mmone;
+          std::cout<<"First f_x: "<<f_xi<<" "<<gradBoost.f_mmone<<" "<<pLeaf<<std::endl;
           resPairs.push_back(make_pair(leaf_res-f_xi,*my_w)); 
         }
 //Update delta
@@ -490,6 +487,9 @@ void
 export_bdtlearner ()
 {
     using namespace boost::python;
+    class_<Booster> (
+        "Booster",
+        init<bool,double,double> ());
 
     class_<BDTLearner, bases<Learner> > (
         "BDTLearner",
@@ -532,4 +532,5 @@ export_bdtlearner ()
         ;
 
     register_ptr_to_python <boost::shared_ptr<BDTLearner> > ();
+    register_ptr_to_python <boost::shared_ptr<Booster> > ();
 }

@@ -24,10 +24,16 @@
 class Booster {
 public:
 //Gradient Boost Variables
-    double firstF;
-    void setFF(double);
-
+  double f_mmone;
+  double quant_val;
+  int p;
+  std::map<const DTNode*,double> f_x;
+  Booster(bool init_bool,double nsig,double nbg);
+//Clark always told me, act like anything can become a base class. Still don't believe in trusting everyone to use boost shared pointers
+  virtual ~Booster();
+  void InitFX(double,double,bool useInit=true);
 };
+
 //TODO: Put this somewhere nicer (Booster?)
 typedef std::vector<std::pair<double,double> > vecpdd;
 typedef vecpdd::iterator vecpdd_iter;
