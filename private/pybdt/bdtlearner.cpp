@@ -234,6 +234,9 @@ BDTLearner::train_given_everything (
 
     // Warning: technically, this usage of dtl.min_split is not threadsafe
     DTLearner& dtl (*m_dtlearner);
+//TODO: Add to Booster Class
+    RegLearner& rdtl (static_cast<RegLearner&>(*m_dtlearner));
+
     int save_min_split (m_dtlearner->m_min_split);
     dtl.min_split (max (
         dtl.min_split (),
@@ -434,7 +437,6 @@ BDTLearner::train_given_everything (
                 sum_wrong_bg_weights += *i_weight;
             }
         }
-
         // AdaBoost: boost weights of misclass'd events
         const double err_m ((sum_wrong_sig_weights + sum_wrong_bg_weights)
                             / (sum_sig_weights + sum_bg_weights));
