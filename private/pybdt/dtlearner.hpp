@@ -36,6 +36,11 @@ struct SepMisclassError : public SepFunc {
     virtual std::string separation_type () const;
 };
 
+struct SumSquaredError : public SepFunc {
+    virtual double operator() (double p) const;
+    virtual std::string separation_type () const;
+};
+
 inline double SepGini::operator() (double p) const
 {
     return p * (1 - p);
@@ -62,6 +67,15 @@ inline double SepMisclassError::operator() (double p) const
 inline std::string SepMisclassError::separation_type () const
 {
     return "misclass_error";
+}
+//Pretty dumb to just return the input value, but it works for now
+inline double SumSquaredError::operator() (double p) const
+{
+    return p;
+}
+inline std::string SumSquaredError::separation_type () const
+{
+    return "sumsquared_error";
 }
 
 
@@ -154,6 +168,12 @@ public:
 
     virtual ~RegLearner ();
 protected:
+    double NodeTargetAverage(const std::vector<double>& sig_targets,
+                             const std::vector<double>& bg_targets) const;
+
+    double NodeSumSquaredError(const std::vector<double>& sig_targets,
+                               const std::vector<double>& bg_targets) const;
+
     boost::shared_ptr<Model> train_given_targets (
         const std::vector<Event>& sig,
         const std::vector<Event>& bg,

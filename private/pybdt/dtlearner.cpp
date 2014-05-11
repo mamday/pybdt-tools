@@ -139,6 +139,9 @@ DTLearner::separation_type (std::string st)
     else if (st == "misclass_error") {
         m_sep_func = boost::make_shared<SepMisclassError> ();
     }
+    else if (st == "sum_squared") {
+        m_sep_func = boost::make_shared<SumSquaredError> ();
+    }
     else {
         throw std::runtime_error ("unknown separation type");
     }
@@ -160,7 +163,7 @@ RegLearner::RegLearner (const vector<string>& feature_names,
                       const string& bg_weight_name)
 : DTLearner (feature_names, sig_weight_name, bg_weight_name)
 {
-    separation_type ("cross_entropy");
+    separation_type ("sum_squared");
 }
 
 RegLearner::RegLearner (
@@ -514,11 +517,36 @@ RegLearner::train_given_targets (const vector<Event>& sig,
 {
     assert (sig.size () == sig_weights.size ());
     assert (bg.size () == bg_weights.size ());
+    assert (sig.size () == sig_targets.size ());
+    assert (bg.size () == bg_targets.size ());
     boost::shared_ptr<DTNode> root = build_reg_tree (
         sig, bg, sig_weights, bg_weights, sig_targets,bg_targets);
     return boost::make_shared<DTModel> (m_feature_names, root);
 }
 
+double RegLearner::NodeTargetAverage(
+    const vector<double>& sig_targets, const vector<double>& bg_targets) const{
+    double nTSum = np::sum(sig_targets)+np::sum(bg_targets);
+    return nTSum/(sig_targets.size()+bg_targets.size());
+}
+double RegLearner::NodeSumSquaredError(
+    const vector<double>& sig_targets, const vector<double>& bg_targets) const{
+//Argh, why aren't these declared in some kind of universal location?
+    typedef vector<double> vecd;
+    typedef vecd::const_iterator vecd_citer;
+//Begin actual algorithm
+    double nTAvg = RegLearner::NodeTargetAverage(sig_targets,bg_targets); 
+    double ssError = 0;
+    for(vecd_citer sig_t = sig_targets.begin(); 
+        sig_t!= sig_targets.end(); sig_t++){
+      ssError += ((*sig_t)-nTAvg)*((*sig_t)-nTAvg); 
+    }
+    for(vecd_citer bg_t = bg_targets.begin(); 
+        bg_t!= bg_targets.end(); bg_t++){
+      ssError += ((*bg_t)-nTAvg)*((*bg_t)-nTAvg); 
+    }
+    return ssError/(sig_targets.size()+bg_targets.size());
+}
 //Have separate method for regression trees. Possibly there is a way of integrating this all into one method that happily merges with the Learner paradigm, but since I had to make a separate train_given_targets, then I will also have a separate build_reg_tree
 boost::shared_ptr<DTNode>
 RegLearner::build_reg_tree (
@@ -540,8 +568,8 @@ RegLearner::build_reg_tree (
     double w_sig (np::sum (sig_weights));
     double w_bg (np::sum (bg_weights));
     const double w_here (w_sig + w_bg);
-    const double purity_here (w_sig / w_here);
-    const double sep_here ((*m_sep_func) (purity_here));
+    const double sserror_here = RegLearner::NodeSumSquaredError(sig_targets,bg_targets);
+    const double sep_here ((*m_sep_func) (sserror_here));
 
     // if too few events, max depth, or all one type, then make leaf now
     if ((n_sig + n_bg < m_min_split)
@@ -574,6 +602,7 @@ RegLearner::build_reg_tree (
 
     vecev_citer i_ev;
     vecd_citer i_weight;
+    vecd_citer i_tgt;
 
     // get extreme values of features
     vector<double> feature_mins (n_split_features);
@@ -616,8 +645,11 @@ RegLearner::build_reg_tree (
     // create sig and bg, weighted and unweighted histogram for each feature
     vector<boost::shared_ptr<Histogram> > w_sig_hists;
     vector<boost::shared_ptr<Histogram> > w_bg_hists;
+    vector<boost::shared_ptr<Histogram> > t_sig_hists;
+    vector<boost::shared_ptr<Histogram> > t_bg_hists;
     vector<boost::shared_ptr<Histogram> > n_sig_hists;
     vector<boost::shared_ptr<Histogram> > n_bg_hists;
+    vector<double> h_bg_targets, h_sig_targets;
     for (int i_i_f (0); i_i_f < n_split_features; ++i_i_f) {
         // get values and weights lists
         //cerr << "variable " << i_i_f << endl;
@@ -634,32 +666,50 @@ RegLearner::build_reg_tree (
         }
         boost::shared_ptr<NonlinearHistogram> h;
         if (m_linear_cuts) {
+          h_bg_targets = bg_targets;
+          h_sig_targets = sig_targets;
 	  w_sig_hists.push_back (boost::make_shared<LinearHistogram> (
                     feature_mins[i_i_f], feature_maxs[i_i_f], m_num_cuts + 1));
 	  w_bg_hists.push_back (boost::make_shared<LinearHistogram> (
+                    feature_mins[i_i_f], feature_maxs[i_i_f], m_num_cuts + 1));
+	  t_sig_hists.push_back (boost::make_shared<LinearHistogram> (
+                    feature_mins[i_i_f], feature_maxs[i_i_f], m_num_cuts + 1));
+	  t_bg_hists.push_back (boost::make_shared<LinearHistogram> (
                     feature_mins[i_i_f], feature_maxs[i_i_f], m_num_cuts + 1));
 	  n_sig_hists.push_back (boost::make_shared<LinearHistogram> (
                     feature_mins[i_i_f], feature_maxs[i_i_f], m_num_cuts + 1));
 	  n_bg_hists.push_back (boost::make_shared<LinearHistogram> (
                     feature_mins[i_i_f], feature_maxs[i_i_f], m_num_cuts + 1));
             w_sig_hists[i_i_f]->fill (sig_values, sig_weights);
+            t_sig_hists[i_i_f]->fill (sig_values, sig_targets);
             n_sig_hists[i_i_f]->fill (sig_values);
             w_bg_hists[i_i_f]->fill (bg_values, bg_weights);
+            t_bg_hists[i_i_f]->fill (bg_values, bg_targets);
             n_bg_hists[i_i_f]->fill (bg_values);
         }
         else {
             pair<vecd,vecd> sig_sorted_values_weights_pair (
                 NonlinearHistogram::get_pair_sorted_values_weights (
                     sig_values, sig_weights));
+            pair<vecd,vecd> sig_sorted_values_targets_pair (
+                NonlinearHistogram::get_pair_sorted_values_weights (
+                    sig_values, sig_targets));
             vecd sig_sorted_values (sig_sorted_values_weights_pair.first);
             vecd sig_sorted_weights (sig_sorted_values_weights_pair.second);
+            vecd sig_sorted_targets (sig_sorted_values_targets_pair.second);
 
             pair<vecd,vecd> bg_sorted_values_weights_pair (
                 NonlinearHistogram::get_pair_sorted_values_weights (
                     bg_values, bg_weights));
+            pair<vecd,vecd> bg_sorted_values_targets_pair (
+                NonlinearHistogram::get_pair_sorted_values_weights (
+                    bg_values, bg_targets));
             vecd bg_sorted_values (bg_sorted_values_weights_pair.first);
             vecd bg_sorted_weights (bg_sorted_values_weights_pair.second);
+            vecd bg_sorted_targets (bg_sorted_values_targets_pair.second);
 
+            h_sig_targets = sig_sorted_targets;
+            h_bg_targets = bg_sorted_targets;
             vecd all_values (sig_sorted_values);
             all_values.insert (
                 all_values.end (),
@@ -670,6 +720,11 @@ RegLearner::build_reg_tree (
                 all_sorted_weights.end (),
                 bg_sorted_weights.begin (), bg_sorted_weights.end ());
 
+            vecd all_sorted_targets (sig_sorted_targets);
+            all_sorted_targets.insert (
+                all_sorted_targets.end (),
+                bg_sorted_targets.begin (), bg_sorted_targets.end ());
+             
             vecd bin_edges (NonlinearHistogram::get_ntile_boundaries (
                     m_num_cuts, all_values, all_sorted_weights));
 
@@ -678,8 +733,16 @@ RegLearner::build_reg_tree (
             w_sig_hists.push_back (h);
 
             h = boost::make_shared<NonlinearHistogram> (bin_edges);
+            h->fill_presorted (sig_sorted_values, sig_sorted_targets);
+            t_sig_hists.push_back (h);
+
+            h = boost::make_shared<NonlinearHistogram> (bin_edges);
             h->fill_presorted (bg_sorted_values, bg_sorted_weights);
             w_bg_hists.push_back (h);
+
+            h = boost::make_shared<NonlinearHistogram> (bin_edges);
+            h->fill_presorted (bg_sorted_values, bg_sorted_targets);
+            t_bg_hists.push_back (h);
 
             h = boost::make_shared<NonlinearHistogram> (bin_edges);
             h->fill_presorted (
@@ -704,23 +767,35 @@ RegLearner::build_reg_tree (
         int i_f (split_features_i[i_i_f]);
         const Histogram& w_h_sig = *w_sig_hists[i_i_f];
         const Histogram& w_h_bg = *w_bg_hists[i_i_f];
+        const Histogram& t_h_sig = *t_sig_hists[i_i_f];
+        const Histogram& t_h_bg = *t_bg_hists[i_i_f];
         const Histogram& n_h_sig = *n_sig_hists[i_i_f];
         const Histogram& n_h_bg = *n_bg_hists[i_i_f];
         double w_sig_left (0), w_sig_right (w_sig);
         double w_bg_left (0), w_bg_right (w_bg);
+        vector<double> t_sig_left;
+        vector<double> t_sig_right = h_sig_targets;
+        vector<double> t_bg_left;
+        vector<double> t_bg_right = h_bg_targets;
         double n_sig_left (0), n_sig_right (n_sig);
         double n_bg_left (0), n_bg_right (n_bg);
         // cut is at right edge of bin -- don't bother checking last bin
         vecd_citer i_w_h_sig (w_h_sig.begin ());
+        vecd_citer i_t_h_sig (t_h_sig.begin ());
         vecd_citer i_n_h_sig (n_h_sig.begin ());
         vecd_citer i_w_h_bg (w_h_bg.begin ());
+        vecd_citer i_t_h_bg (t_h_bg.begin ());
         vecd_citer i_n_h_bg (n_h_bg.begin ());
         int i_bin (0);
         const int n_bins (w_h_sig.n_bins ());
         for (; i_bin < n_bins - 1;
-             ++i_bin, ++i_w_h_sig, ++i_n_h_sig, ++i_w_h_bg, ++i_n_h_bg) {
+             ++i_bin, ++i_w_h_sig, ++i_t_h_sig, ++i_n_h_sig, ++i_w_h_bg, ++i_t_h_bg, ++i_n_h_bg) {
              w_sig_left += *i_w_h_sig;
              w_bg_left += *i_w_h_bg;
+             t_sig_left.push_back(*i_t_h_sig);
+             t_bg_left.push_back(*i_t_h_bg);
+             t_sig_right.erase(t_sig_right.begin());
+             t_bg_right.erase(t_bg_right.begin());
              n_sig_left += *i_n_h_sig;
              n_bg_left += *i_n_h_bg;
              w_sig_right -= *i_w_h_sig;
@@ -753,10 +828,10 @@ RegLearner::build_reg_tree (
                 // cerr << endl << "w_sig_right = " << w_sig_right
                 //     << " and w_bg_right = " << w_bg_right;
             }
-            const double purity_left = w_sig_left / w_left;
-            const double purity_right = w_sig_right / w_right;
-            const double sep_left = (*m_sep_func) (purity_left);
-            const double sep_right = (*m_sep_func) (purity_right);
+            const double sserror_left = RegLearner::NodeSumSquaredError(t_sig_left,t_bg_left);
+            const double sserror_right = RegLearner::NodeSumSquaredError(t_sig_right,t_bg_right);
+            const double sep_left = (*m_sep_func) (sserror_left);
+            const double sep_right = (*m_sep_func) (sserror_right);
             const double sep_gain = w_here * sep_here
                 - (w_left * sep_left) - (w_right * sep_right);
             if (sep_gain > best_sep_gain) {
@@ -787,45 +862,63 @@ RegLearner::build_reg_tree (
         vector<double> sig_weights_right;
         vector<double> bg_weights_left;
         vector<double> bg_weights_right;
+        vector<double> sig_targets_left;
+        vector<double> sig_targets_right;
+        vector<double> bg_targets_left;
+        vector<double> bg_targets_right;
         sig_weights_left.reserve (n_sig);
         sig_weights_right.reserve (n_sig);
         bg_weights_left.reserve (n_bg);
         bg_weights_right.reserve (n_bg);
+        sig_targets_left.reserve (n_sig);
+        sig_targets_right.reserve (n_sig);
+        bg_targets_left.reserve (n_bg);
+        bg_targets_right.reserve (n_bg);
 
         for (i_ev = sig_events.begin (), i_weight = sig_weights.begin ();
-             i_ev != sig_events.end (); ++i_ev, ++i_weight) {
+             i_tgt = sig_targets.begin(), i_ev != sig_events.end (); 
+             ++i_ev, ++i_weight, ++i_tgt) {
             const Event& event = *i_ev;
             double weight = *i_weight;
+            double target = *i_tgt;
             if (event.value (best_i_f) < best_cut_val) {
                 sig_left.push_back (event);
                 sig_weights_left.push_back (weight);
+                sig_targets_left.push_back (target);
             }
             else {
                 sig_right.push_back (event);
                 sig_weights_right.push_back (weight);
+                sig_targets_right.push_back (target);
             }
         }
         for (i_ev = bg_events.begin (), i_weight = bg_weights.begin ();
-             i_ev != bg_events.end (); ++i_ev, ++i_weight) {
+             i_tgt = sig_targets.begin(), i_ev != bg_events.end (); 
+             ++i_ev, ++i_weight, ++i_tgt) {
             const Event& event = *i_ev;
             double weight = *i_weight;
+            double target = *i_tgt;
             if (event.value (best_i_f) < best_cut_val) {
                 bg_left.push_back (event);
                 bg_weights_left.push_back (weight);
+                bg_targets_left.push_back (target);
             }
             else {
                 bg_right.push_back (event);
                 bg_weights_right.push_back (weight);
+                bg_targets_right.push_back (target);
             }
         }
 
-        boost::shared_ptr<DTNode> left (build_tree (
+        boost::shared_ptr<DTNode> left (build_reg_tree (
                 sig_left, bg_left,
                 sig_weights_left, bg_weights_left,
+                sig_targets_left, bg_targets_left,
                 depth + 1));
-        boost::shared_ptr<DTNode> right (build_tree (
+        boost::shared_ptr<DTNode> right (build_reg_tree (
                 sig_right, bg_right,
                 sig_weights_right, bg_weights_right,
+                sig_targets_right, bg_targets_right,
                 depth + 1));
         assert (left);
         assert (right);
